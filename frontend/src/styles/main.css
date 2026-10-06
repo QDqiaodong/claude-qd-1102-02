@@ -1,0 +1,29 @@
+:root {
+  /* 咖啡馆主色 —— 棕色调 */
+  --primary: #6D4C41;
+  --primary-deep: #573C33;
+  --primary-soft: #A8897C;
+  --primary-wash: #E3D8D1;
+  --ink: #3A312C;
+  --muted: #8A7A72;
+  --line: #E7DED7;
+  --bg: #f7f3f0;
+
+  --el-color-primary: #6D4C41;
+  --el-color-primary-light-3: #926E62;
+  --el-color-primary-light-5: #A8897C;
+  --el-color-primary-light-7: #BDA79D;
+  --el-color-primary-light-8: #CAB8AE;
+  --el-color-primary-light-9: #E3D8D1;
+  --el-color-primary-dark-2: #573C33;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+}
