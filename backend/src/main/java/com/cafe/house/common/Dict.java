@@ -35,6 +35,17 @@ public final class Dict {
     /** 桌台状态：空闲 / 占用 / 清洁中 */
     public static final List<String> TABLE_STATUS = List.of("空闲", "占用", "清洁中");
 
+    // ---------------- 清洁交接 ----------------
+    /** 清洁单状态：结账后「待接单」→ 清洁人员接单后「清洁中」→ 完成后「已完成」（桌台回到空闲） */
+    public static final List<String> CLEANING_STATUS = List.of("待接单", "清洁中", "已完成");
+
+    /** 清洁单的未完成态（仍占着桌台）：待接单 / 清洁中 */
+    public static final List<String> CLEANING_ACTIVE_STATUS = List.of("待接单", "清洁中");
+
+    /** 交接事件（只追加、不改写）：结账转清洁 → 接单 → 暂存原因 → 完成清洁；清洁中可撤回为待接单 */
+    public static final List<String> CLEANING_ACTIONS =
+            List.of("结账转清洁", "接单", "暂存原因", "完成清洁", "撤回清洁");
+
     // ---------------- 点单出单 ----------------
     /** 账单状态：制作中 → 已完成 → 已结账 */
     public static final List<String> TICKET_STATUS = List.of("制作中", "已完成", "已结账");
@@ -68,6 +79,18 @@ public final class Dict {
 
     public static boolean isValidTableStatus(String s) {
         return s != null && TABLE_STATUS.contains(s);
+    }
+
+    public static boolean isValidCleaningStatus(String s) {
+        return s != null && CLEANING_STATUS.contains(s);
+    }
+
+    public static boolean isActiveCleaningStatus(String s) {
+        return s != null && CLEANING_ACTIVE_STATUS.contains(s);
+    }
+
+    public static boolean isValidCleaningAction(String s) {
+        return s != null && CLEANING_ACTIONS.contains(s);
     }
 
     public static boolean isValidTicketStatus(String s) {

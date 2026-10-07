@@ -5,6 +5,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import BeanBatchView from '../views/BeanBatchView.vue'
 import MenuItemView from '../views/MenuItemView.vue'
 import TableInfoView from '../views/TableInfoView.vue'
+import CleaningView from '../views/CleaningView.vue'
 import OrderTicketView from '../views/OrderTicketView.vue'
 
 const routes = [
@@ -12,6 +13,7 @@ const routes = [
   { path: '/bean-batch', name: 'bean-batch', component: BeanBatchView },
   { path: '/menu-item', name: 'menu-item', component: MenuItemView },
   { path: '/table-info', name: 'table-info', component: TableInfoView },
+  { path: '/cleaning', name: 'cleaning', component: CleaningView },
   { path: '/order-ticket', name: 'order-ticket', component: OrderTicketView },
   { path: '/:pathMatch(.*)*', redirect: '/bean-batch' }
 ]

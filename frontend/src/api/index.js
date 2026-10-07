@@ -42,7 +42,18 @@ export default {
   createTableInfo: (d) => call(http.post('/table-infos', d)),
   updateTableInfo: (id, d) => call(http.put(`/table-infos/${id}`, d)),
   openTable: (id) => call(http.post(`/table-infos/${id}/open`)),
-  cleanTable: (id) => call(http.post(`/table-infos/${id}/clean`)),
+
+  // ---------------- 清洁交接 ----------------
+  cleaningQueue: () => call(http.get('/cleanings/queue')),
+  cleaningDashboard: () => call(http.get('/cleanings/dashboard')),
+  listCleanings: () => call(http.get('/cleanings')),
+  latestCleaning: (tableId) => call(http.get(`/cleanings/table/${tableId}/latest`)),
+  cleaningLogs: (id) => call(http.get(`/cleanings/${id}/logs`)),
+  tableCleaningLogs: (tableId) => call(http.get(`/cleanings/table/${tableId}/logs`)),
+  claimCleaning: (id, cleaner, etaAt) => call(http.post(`/cleanings/${id}/claim`, { cleaner, etaAt })),
+  saveCleaningReason: (id, cleaner, reason) => call(http.post(`/cleanings/${id}/save-reason`, { cleaner, reason })),
+  completeCleaning: (id, cleaner) => call(http.post(`/cleanings/${id}/complete`, { cleaner })),
+  withdrawCleaning: (id, cleaner) => call(http.post(`/cleanings/${id}/withdraw`, { cleaner })),
 
   // ---------------- 点单出单 ----------------
   listOrderTickets: (status) => call(http.get('/order-tickets', params(status ? { status } : {}))),
@@ -51,7 +62,7 @@ export default {
   addOrderItem: (id, d) => call(http.post(`/order-tickets/${id}/add-item`, d)),
   finishPreview: (id) => call(http.get(`/order-tickets/${id}/finish-preview`)),
   finishOrderTicket: (id, operator) => call(http.post(`/order-tickets/${id}/finish`, { operator })),
-  settleOrderTicket: (id) => call(http.post(`/order-tickets/${id}/settle`)),
+  settleOrderTicket: (id, operator) => call(http.post(`/order-tickets/${id}/settle`, { operator })),
 
   // ---------------- 库存视图 / 批次追溯 ----------------
   onSaleStock: () => call(http.get('/stock/on-sale')),

@@ -47,14 +47,15 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 行锁冲突（两名收银员并发完成、抢同一批次，或锁等待超时/死锁回滚）：409。
-     * 事务回滚保证账单保持原状态、批次未被扣减；收银员刷新后可按原流程继续处理。
+     * 行锁冲突（并发完成制作/抢同一批次，或并发完成清洁、撤回清洁、开台/结账，
+     * 或锁等待超时/死锁回滚）：409。事务回滚保证账单/桌台/清洁单保持原状态、
+     * 责任人与未完成原因不被覆盖；前端刷新后按最新状态继续处理。
      */
     @ExceptionHandler({PessimisticLockException.class, LockTimeoutException.class,
             CannotAcquireLockException.class})
     public ResponseEntity<ApiResponse<Void>> handleLock(Exception e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.fail(
-                "当前有另一位收银员正在处理同一账单或批次，请刷新后重试；本次未扣减任何豆量、账单状态不变"));
+                "该桌台/账单/清洁单正有其他人在同时操作，本次状态推进未生效，请刷新后按最新状态重试（责任人与未完成原因不会被本次失败操作覆盖）"));
     }
 
     /**

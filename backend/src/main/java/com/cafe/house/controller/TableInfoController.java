@@ -42,9 +42,4 @@ public class TableInfoController {
     public ApiResponse<TableInfo> open(@PathVariable Long id) {
         return ApiResponse.success(service.open(id));
     }
-
-    @PostMapping("/{id}/clean")
-    public ApiResponse<TableInfo> clean(@PathVariable Long id) {
-        return ApiResponse.success(service.clean(id));
-    }
 }

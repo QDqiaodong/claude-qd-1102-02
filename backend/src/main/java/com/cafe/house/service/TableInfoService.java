@@ -2,11 +2,14 @@ package com.cafe.house.service;
 
 import com.cafe.house.common.BizException;
 import com.cafe.house.common.Dict;
+import com.cafe.house.entity.CleaningTask;
 import com.cafe.house.entity.TableInfo;
+import com.cafe.house.repository.CleaningTaskRepository;
 import com.cafe.house.repository.TableInfoRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -15,6 +18,9 @@ public class TableInfoService {
 
     @Autowired
     private TableInfoRepository repo;
+
+    @Autowired
+    private CleaningTaskRepository cleaningTaskRepo;
 
     public List<TableInfo> list(String status) {
         return status == null ? repo.findAll() : repo.findByStatus(status);
@@ -33,10 +39,8 @@ public class TableInfoService {
         TableInfo t = new TableInfo();
         t.tableNo = input.tableNo;
         t.seats = input.seats;
-        t.status = input.status == null ? "空闲" : input.status;
-        if (!Dict.isValidTableStatus(t.status)) {
-            throw new BizException("状态必须是 空闲 / 占用 / 清洁中 之一");
-        }
+        // 新桌台一律「空闲」：占用/清洁中只能由开台与清洁交接流程驱动，不能手工指定
+        t.status = "空闲";
         return repo.save(t);
     }
 
@@ -54,38 +58,40 @@ public class TableInfoService {
             }
             t.seats = input.seats;
         }
-        if (input.status != null) {
-            if (!Dict.isValidTableStatus(input.status)) {
-                throw new BizException("状态必须是 空闲 / 占用 / 清洁中 之一");
-            }
-            t.status = input.status;
+        // 桌台状态只能走业务流程（开台 / 结账转清洁 / 完成清洁），编辑表单不允许手工改状态，
+        // 杜绝收银员或管理员绕过清洁直接把「清洁中」改成「空闲」。
+        if (input.status != null && !input.status.equals(t.status)) {
+            throw new BizException("桌台状态不能手工修改：空闲→占用由收银员开台，占用→清洁中由结账触发，清洁中→空闲由清洁人员完成清洁");
         }
-        return repo.save(t);
-    }
-
-    /** 开台：只有「空闲」可开台，置为「占用」；清洁中不能开台。 */
-    public TableInfo open(Long id) {
-        TableInfo t = repo.findById(id).orElseThrow(() -> new BizException("桌台不存在"));
-        if (!"空闲".equals(t.status)) {
-            throw new BizException("只有「空闲」的桌台可以开台（清洁中无法开台）");
-        }
-        t.status = "占用";
         return repo.save(t);
     }
 
     /**
-     * 清洁：占用 → 清洁中（开始收台清洁）；清洁中 → 空闲（清洁完成）。
-     * 空闲桌台无需清洁。
+     * 开台（收银员）：只有「空闲」桌台可开台，行锁内推进为「占用」。
+     *
+     * <p>并发口径：对桌台行加写锁，收银员连点开台、与清洁完成并发时只接受一个合法推进。
+     * 清洁中（含待接单/清洁中清洁单）一律拦截并给出原因，收银员不能绕过清洁直接为下一桌开台。</p>
      */
-    public TableInfo clean(Long id) {
-        TableInfo t = repo.findById(id).orElseThrow(() -> new BizException("桌台不存在"));
-        if ("占用".equals(t.status)) {
-            t.status = "清洁中";
-        } else if ("清洁中".equals(t.status)) {
-            t.status = "空闲";
-        } else {
-            throw new BizException("桌台当前为空闲，无需清洁");
+    @Transactional
+    public TableInfo open(Long id) {
+        List<TableInfo> locked = repo.findByIdForUpdate(id);
+        if (locked.isEmpty()) {
+            throw new BizException("桌台不存在");
         }
+        TableInfo t = locked.get(0);
+        if ("占用".equals(t.status)) {
+            throw new BizException("桌台已开台，请勿重复点击（可刷新查看最新状态）");
+        }
+        if ("清洁中".equals(t.status)) {
+            List<CleaningTask> active = cleaningTaskRepo.findByTableIdAndStatusIn(
+                    id, Dict.CLEANING_ACTIVE_STATUS);
+            String who = active.isEmpty() || active.get(0).cleaner == null
+                    ? "等待清洁人员接单"
+                    : "清洁责任人「" + active.get(0).cleaner + "」清洁中";
+            throw new BizException("桌台清洁尚未完成（" + who
+                    + "），不能直接开台；请等待清洁人员「完成清洁」、桌台显示为空闲后再开台");
+        }
+        t.status = "占用";
         return repo.save(t);
     }
 }

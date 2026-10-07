@@ -41,6 +41,14 @@ public class OrderTicket {
     @Column(name = "finished_at")
     public LocalDateTime finishedAt;
 
+    /** 结账操作者（收银员）；结账时桌台同步进入「清洁中」并生成清洁交接单。 */
+    @Column(name = "settled_by", length = 32)
+    public String settledBy;
+
+    /** 结账时间（桌台转入清洁队列时点）。 */
+    @Column(name = "settled_at")
+    public LocalDateTime settledAt;
+
     @Column(name = "created_at")
     public LocalDateTime createdAt = LocalDateTime.now();
 }

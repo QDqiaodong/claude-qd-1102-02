@@ -55,6 +55,9 @@ public class OrderTicketService {
     @Autowired
     private BeanConsumptionRepository consumptionRepo;
 
+    @Autowired
+    private CleaningService cleaningService;
+
     /** 同一桌台允许的未结账状态集合 */
     private static final List<String> ACTIVE_STATUSES = List.of("制作中", "已完成");
 
@@ -152,20 +155,45 @@ public class OrderTicketService {
         return detail(id);
     }
 
-    /** 结账：已完成 → 已结账，并释放桌台为「空闲」。结账不再触碰豆量。 */
+    /**
+     * 结账：已完成 → 已结账。结账【不再直接释放为空闲】：同一事务内
+     * 账单行锁 → 桌台行锁串行，桌台「占用 → 清洁中」并生成一张「待接单」
+     * 清洁交接单（写结账收银员与「结账转清洁」流水）。只有清洁人员完成清洁后，
+     * 桌台才回到「空闲」可开台。
+     *
+     * <p>并发口径：先锁账单行，重复结账的后到事务看到终态直接拒绝；
+     * 再由 CleaningService 锁桌台行并入清洁队列，与开台/清洁动作互不覆盖。</p>
+     */
     @Transactional
-    public OrderTicketDetail settle(Long id) {
-        OrderTicket ticket = ticketRepo.findById(id).orElseThrow(() -> new BizException("账单不存在"));
+    public OrderTicketDetail settle(Long id, SettleTicketRequest req) {
+        String cashier = req == null || req.operator() == null ? null : req.operator().trim();
+        if (cashier == null || cashier.isEmpty()) {
+            throw new BizException("请选择或填写结账收银员");
+        }
+        if (cashier.length() > 32) {
+            throw new BizException("收银员姓名不能超过 32 个字符");
+        }
+
+        OrderTicket ticket = lockTicket(id);
+        if ("已结账".equals(ticket.status)) {
+            throw new BizException("该账单已结账，请勿重复提交（桌台已进入清洁队列）");
+        }
         if (!Dict.canTransferTicket(ticket.status, "已结账")) {
             throw new BizException("请先完成制作再结账");
         }
+
+        LocalDateTime now = LocalDateTime.now();
         ticket.status = "已结账";
+        ticket.settledBy = cashier;
+        ticket.settledAt = now;
         ticketRepo.save(ticket);
+
         if (ticket.tableId != null) {
-            tableRepo.findById(ticket.tableId).ifPresent(t -> {
-                t.status = "空闲";
-                tableRepo.save(t);
-            });
+            // 同事务入清洁队列：桌台置清洁中、建待接单清洁单、写交接流水。
+            // 任一步失败则整单回滚（账单保持已完成、桌台保持占用）。
+            TableInfo table = tableRepo.findById(ticket.tableId)
+                    .orElseThrow(() -> new BizException("桌台不存在"));
+            cleaningService.enqueueFromSettle(table, ticket, cashier, now);
         }
         return detail(id);
     }
@@ -395,6 +423,9 @@ public class OrderTicketService {
     }
 
     public record FinishTicketRequest(String operator) {
+    }
+
+    public record SettleTicketRequest(String operator) {
     }
 
     public record OrderItemDetail(

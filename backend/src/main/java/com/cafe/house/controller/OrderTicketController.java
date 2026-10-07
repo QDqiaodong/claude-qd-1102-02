@@ -7,6 +7,7 @@ import com.cafe.house.service.OrderTicketService.CreateTicketRequest;
 import com.cafe.house.service.OrderTicketService.FinishPreview;
 import com.cafe.house.service.OrderTicketService.FinishTicketRequest;
 import com.cafe.house.service.OrderTicketService.OrderTicketDetail;
+import com.cafe.house.service.OrderTicketService.SettleTicketRequest;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,8 +59,10 @@ public class OrderTicketController {
         return ApiResponse.success(service.finish(id, req));
     }
 
+    /** 结账：必须带收银员；结账后桌台进入清洁中并生成清洁交接单（不会直接空闲）。 */
     @PostMapping("/{id}/settle")
-    public ApiResponse<OrderTicketDetail> settle(@PathVariable Long id) {
-        return ApiResponse.success(service.settle(id));
+    public ApiResponse<OrderTicketDetail> settle(@PathVariable Long id,
+                                                 @RequestBody(required = false) SettleTicketRequest req) {
+        return ApiResponse.success(service.settle(id, req));
     }
 }

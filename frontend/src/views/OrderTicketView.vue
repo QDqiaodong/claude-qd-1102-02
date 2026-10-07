@@ -6,6 +6,7 @@ import api from '../api'
 const emit = defineEmits(['changed'])
 
 const tables = ref([])
+const cleaningMap = ref({})   // tableId -> 当前清洁单（结账入队/责任人/预计完成/拦截原因）
 const menuItems = ref([])       // 在售饮品（基础信息）
 const stockMap = ref({})        // menuItemId -> 库存视图
 const selected = ref(null)
@@ -14,6 +15,7 @@ const preview = ref(null)       // 完成前消耗预览
 const operator = ref(localStorage.getItem('cafe_operator') || '')
 const OPERATOR_PRESETS = ['小张', '小李', '小王']
 const finishing = ref(false)
+const settling = ref(false)
 
 const tableType = (s) => ({ '空闲': 'success', '占用': 'warning', '清洁中': 'info' }[s] || 'info')
 const ticketType = (s) => ({ '制作中': 'warning', '已完成': 'success', '已结账': 'info' }[s] || 'info')
@@ -30,7 +32,11 @@ const crossItemNos = computed(() => {
   return Object.keys(cnt).filter((k) => cnt[k] > 1).map(Number)
 })
 
-async function loadTables() { tables.value = await api.listTableInfos() }
+async function loadTables() {
+  const [ts, q] = await Promise.all([api.listTableInfos(), api.cleaningQueue()])
+  tables.value = ts
+  cleaningMap.value = Object.fromEntries(q.map((x) => [x.tableId, x]))
+}
 async function loadMenu() {
   const [menus, stock] = await Promise.all([api.listMenuItems('在售'), api.onSaleStock()])
   menuItems.value = menus
@@ -126,13 +132,28 @@ async function finish() {
 }
 
 async function settle() {
+  if (settling.value) return      // 防重复结账
+  if (!operator.value || !operator.value.trim()) {
+    ElMessage.warning('请先选择或填写结账收银员'); return
+  }
+  settling.value = true
   try {
-    await api.settleOrderTicket(current.value.ticket.id)
+    const settledTableId = current.value.ticket.tableId
+    await api.settleOrderTicket(current.value.ticket.id, operator.value.trim())
     await loadTables()
     current.value = null
     preview.value = null
-    emit('changed'); ElMessage.success('已结账，桌台已释放')
-  } catch (e) { ElMessage.error(e.message) }
+    if (selected.value && selected.value.id === settledTableId) {
+      selected.value = tables.value.find((x) => x.id === settledTableId) || selected.value
+    }
+    emit('changed')
+    ElMessage.success('已结账：桌台已进入「清洁中」，清洁人员完成清洁后才能为下一桌开台')
+  } catch (e) {
+    await refresh()
+    ElMessage({ type: 'error', message: e.message, duration: 6000, showClose: true })
+  } finally {
+    settling.value = false
+  }
 }
 
 function fmtTime(t) { return t ? String(t).replace('T', ' ').slice(0, 16) : '' }
@@ -256,10 +277,17 @@ onMounted(async () => { await loadTables(); await loadMenu() })
         <div class="col-head">桌台与结算</div>
         <div class="table-grid">
           <button v-for="t in tables" :key="t.id" class="table-card"
-            :class="{ on: selected && selected.id === t.id }" @click="selectTable(t)">
+            :class="{ on: selected && selected.id === t.id, cleaning: t.status === '清洁中' }" @click="selectTable(t)">
             <span class="tc-no">{{ t.tableNo }}</span>
             <span class="tc-seats">{{ t.seats }} 座</span>
             <el-tag size="small" :type="tableType(t.status)">{{ t.status }}</el-tag>
+            <span v-if="t.status === '清洁中'" class="tc-clean">
+              <template v-if="cleaningMap[t.id] && cleaningMap[t.id].cleaner">
+                清洁：{{ cleaningMap[t.id].cleaner }}
+              </template>
+              <template v-else-if="cleaningMap[t.id]">待清洁接单</template>
+              <template v-else>清洁流程处理中</template>
+            </span>
           </button>
         </div>
 
@@ -267,6 +295,10 @@ onMounted(async () => { await loadTables(); await loadMenu() })
           <div class="pay-row">
             <span>当前桌台</span><b>{{ selected.tableNo }}（{{ selected.status }}）</b>
           </div>
+          <el-alert v-if="selected.status === '清洁中'" type="error" :closable="false" show-icon
+            :title="cleaningMap[selected.id] && cleaningMap[selected.id].cleaner
+              ? `清洁未完成，不能开台：责任人「${cleaningMap[selected.id].cleaner}」清洁中，预计 ${fmtTime(cleaningMap[selected.id].etaAt)} 完成`
+              : '清洁未完成，不能开台：清洁单尚待清洁人员接单'" />
           <el-button v-if="selected.status === '空闲'" type="primary" @click="openSelected">开台</el-button>
 
           <template v-if="current">
@@ -280,7 +312,11 @@ onMounted(async () => { await loadTables(); await loadMenu() })
               @click="finish">
               {{ finishing ? '正在完成…' : '完成制作（按配方扣豆）' }}
             </el-button>
-            <el-button v-if="current.ticket.status === '已完成'" type="primary" @click="settle">结账</el-button>
+            <el-button v-if="current.ticket.status === '已完成'" type="primary"
+              :loading="settling" :disabled="settling || !operator"
+              @click="settle">
+              {{ settling ? '正在结账…' : '结账（释放桌台进入清洁）' }}
+            </el-button>
             <el-button size="small" text @click="refresh">刷新账单/库存</el-button>
           </template>
         </div>
@@ -341,8 +377,10 @@ onMounted(async () => { await loadTables(); await loadMenu() })
   background: #fff; cursor: pointer; transition: all .15s;
 }
 .table-card.on { border-color: var(--primary); background: var(--primary-wash); }
+.table-card.cleaning { border-style: dashed; background: #fafafa; }
 .tc-no { font-weight: 700; font-size: 16px; }
 .tc-seats { font-size: 12px; color: var(--muted); }
+.tc-clean { font-size: 11px; color: #909399; line-height: 1.3; text-align: center; }
 
 .pay-box { border-top: 1px dashed var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .pay-box.hint { color: var(--muted); }
