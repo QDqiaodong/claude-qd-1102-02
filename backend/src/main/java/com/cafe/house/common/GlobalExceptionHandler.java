@@ -54,7 +54,7 @@ public class GlobalExceptionHandler {
             CannotAcquireLockException.class})
     public ResponseEntity<ApiResponse<Void>> handleLock(Exception e) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.fail(
-                "当前有另一位收银员正在处理同一账单或批次，请刷新后重试；本次未扣减任何豆量、账单状态不变"));
+                "当前有另一位同事正在处理同一账单、桌台或清洁单，请刷新后重试；本次没有推进状态，也没有覆盖责任人、原因或扣减任何豆量"));
     }
 
     /**

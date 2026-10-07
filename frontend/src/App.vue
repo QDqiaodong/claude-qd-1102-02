@@ -7,6 +7,7 @@ import BeanBatchView from './views/BeanBatchView.vue'
 import MenuItemView from './views/MenuItemView.vue'
 import TableInfoView from './views/TableInfoView.vue'
 import OrderTicketView from './views/OrderTicketView.vue'
+import CleaningView from './views/CleaningView.vue'
 
 // ------------------------------------------------------------------
 // 导航形态：顶部横向导航（el-menu mode="horizontal"）。
@@ -17,6 +18,7 @@ const modules = [
   { path: '/bean-batch',  label: '咖啡豆批次', sub: '烘焙状态机', comp: BeanBatchView },
   { path: '/menu-item',   label: '饮品菜单',   sub: '在售 / 下架', comp: MenuItemView },
   { path: '/table-info',  label: '桌台',       sub: '开台 / 清洁', comp: TableInfoView },
+  { path: '/cleaning',     label: '清洁交接',   sub: '接单 / 完成', comp: CleaningView },
   { path: '/order-ticket', label: '收银出单',  sub: 'POS 一条式',  comp: OrderTicketView }
 ]
 
@@ -30,14 +32,15 @@ const currentView = computed(() => {
 
 async function loadCounts() {
   try {
-    const [b, m, t, o] = await Promise.all([
+    const [b, m, t, q, o] = await Promise.all([
       api.listBeanBatches(), api.listMenuItems(),
-      api.listTableInfos(), api.listOrderTickets()
+      api.listTableInfos(), api.cleaningQueue(), api.listOrderTickets()
     ])
     counts.value = {
       '/bean-batch': b.length,
       '/menu-item': m.length,
       '/table-info': t.length,
+      '/cleaning': q.length,
       '/order-ticket': o.length
     }
   } catch (e) { /* 计数失败不影响主流程 */ }

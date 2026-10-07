@@ -23,6 +23,8 @@ CREATE DATABASE IF NOT EXISTS cafe_house
 USE cafe_house;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS cleaning_handover;
+DROP TABLE IF EXISTS cleaning_task;
 DROP TABLE IF EXISTS bean_consumption;
 DROP TABLE IF EXISTS menu_recipe;
 DROP TABLE IF EXISTS order_item;
@@ -83,6 +85,8 @@ CREATE TABLE order_ticket (
     status      VARCHAR(16) NOT NULL COMMENT '制作中/已完成/已结账',
     finished_by VARCHAR(32) COMMENT '完成操作者（收银员）',
     finished_at DATETIME    COMMENT '完成制作时间（消耗扣减时点）',
+    settled_by  VARCHAR(32) COMMENT '结账操作者（收银员）',
+    settled_at  DATETIME    COMMENT '结账时间（桌台进入清洁队列时点）',
     created_at  DATETIME    COMMENT '创建时间'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -113,6 +117,43 @@ CREATE TABLE bean_consumption (
     UNIQUE KEY uk_consume_item_batch (ticket_id, ticket_item_id, batch_id) COMMENT '防同一明细重复扣同批次',
     KEY idx_consume_batch (batch_id),
     KEY idx_consume_ticket (ticket_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ---------------- 桌台清洁单（当前队列状态；完成后归档保留） ----------------
+CREATE TABLE cleaning_task (
+    id                  BIGINT AUTO_INCREMENT PRIMARY KEY,
+    table_id            BIGINT       NOT NULL COMMENT '桌台 id',
+    ticket_id           BIGINT       COMMENT '结账账单 id',
+    status              VARCHAR(16)  NOT NULL COMMENT '待接单/清洁中/已完成',
+    released_by         VARCHAR(32)  COMMENT '结账释放桌台的收银员',
+    released_at         DATETIME     NOT NULL COMMENT '结账释放时间',
+    cleaner_name        VARCHAR(32)  COMMENT '清洁责任人（接单时写入）',
+    accepted_at         DATETIME     COMMENT '清洁开始/接单时间',
+    expected_finish_at  DATETIME     COMMENT '预计完成时间（接单时填写）',
+    unfinished_reason   VARCHAR(500) COMMENT '未完成原因，可反复暂存；完成前必须清空',
+    reason_updated_at   DATETIME     COMMENT '原因最近暂存时间',
+    completed_at        DATETIME     COMMENT '实际完成时间',
+    KEY idx_cleaning_task_status (status),
+    KEY idx_cleaning_task_table (table_id, id),
+    KEY idx_cleaning_task_ticket (ticket_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ---------------- 清洁交接流水（只追加，不修改、不删除） ----------------
+CREATE TABLE cleaning_handover (
+    id                 BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id            BIGINT       NOT NULL COMMENT '清洁单 id',
+    table_id           BIGINT       NOT NULL COMMENT '桌台 id',
+    ticket_id          BIGINT       COMMENT '结账账单 id',
+    event              VARCHAR(32)  NOT NULL COMMENT '结账待清洁/接单/暂存原因/完成清洁/撤回清洁',
+    from_status        VARCHAR(16)  COMMENT '变化前状态',
+    to_status          VARCHAR(16)  COMMENT '变化后状态',
+    operator_name      VARCHAR(32)  COMMENT '交接操作者',
+    expected_finish_at DATETIME     COMMENT '当时预计完成时间快照',
+    unfinished_reason  VARCHAR(500) COMMENT '当时原因快照',
+    created_at         DATETIME     NOT NULL COMMENT '交接时间',
+    KEY idx_handover_task (task_id, id),
+    KEY idx_handover_recent (id),
+    KEY idx_handover_table (table_id, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- =====================================================================
@@ -160,13 +201,24 @@ INSERT INTO table_info (table_no, seats, status, created_at) VALUES
 ('B1', 2, '空闲',   UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 60 DAY),
 ('B2', 6, '清洁中', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 60 DAY),
 ('C1', 4, '占用',   UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 60 DAY),
-('C2', 2, '空闲',   UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 60 DAY);
+('C2', 2, '清洁中', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 60 DAY);
 
--- 账单：A2(table=2) 制作中、C1(table=5) 已完成、B1(table=3) 已结账（桌台已释放为空闲）
-INSERT INTO order_ticket (id, table_id, total, status, created_at) VALUES
-(1, 2, 54.00, '制作中', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 1 DAY),
-(2, 5, 38.00, '已完成', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 2 DAY),
-(3, 3, 46.00, '已结账', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY);
+-- 账单：A2(table=2) 制作中、C1(table=5) 已完成、B1(table=3) 已完成清洁后重新开台；B2/C2 已结账入清洁队列
+INSERT INTO order_ticket
+    (id, table_id, total, status, finished_by, finished_at, settled_by, settled_at, created_at)
+VALUES
+(1, 2, 54.00, '制作中', NULL, NULL, NULL, NULL, UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 1 DAY),
+(2, 5, 38.00, '已完成', '小张', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 2 DAY + INTERVAL 10 MINUTE,
+    NULL, NULL, UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 2 DAY),
+(3, 3, 46.00, '已结账', '小张', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 10 MINUTE,
+    '小王', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 20 MINUTE,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY),
+(4, 4, 62.00, '已结账', '小李', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 100 MINUTE,
+    '小李', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 90 MINUTE,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 100 MINUTE),
+(5, 6, 30.00, '已结账', '小王', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 55 MINUTE,
+    '小王', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 45 MINUTE,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 55 MINUTE);
 
 -- 明细同时点入菜名/单价/类别快照（按饮品名关联，与自增 id 解耦）
 INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, menu_category)
@@ -179,3 +231,48 @@ INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, men
 SELECT 3, id, 1, name, price, category FROM menu_item WHERE name = '意式浓缩';
 INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, menu_category)
 SELECT 3, id, 1, name, price, category FROM menu_item WHERE name = '拿铁';
+INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, menu_category)
+SELECT 4, id, 1, name, price, category FROM menu_item WHERE name = '美式';
+INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, menu_category)
+SELECT 4, id, 2, name, price, category FROM menu_item WHERE name = '拿铁';
+INSERT INTO order_item (ticket_id, menu_item_id, qty, menu_name, unit_price, menu_category)
+SELECT 5, id, 1, name, price, category FROM menu_item WHERE name = '抹茶拿铁';
+
+-- 当前清洁队列：B2=待接单；C2=已接单且有暂存原因，可继续处理/撤回。task 3 已归档，用来验证历史不被改写。
+INSERT INTO cleaning_task
+    (id, table_id, ticket_id, status, released_by, released_at, cleaner_name, accepted_at,
+     expected_finish_at, unfinished_reason, reason_updated_at, completed_at)
+VALUES
+(1, 4, 4, '待接单', '小李', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 90 MINUTE,
+    NULL, NULL, NULL, NULL, NULL, NULL),
+(2, 6, 5, '清洁中', '小王', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 45 MINUTE,
+    '小赵', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 40 MINUTE,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR + INTERVAL 20 MINUTE,
+    '地面有咖啡渍，等待清洁剂补充', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 15 MINUTE, NULL),
+(3, 3, 3, '已完成', '小王', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 20 MINUTE,
+    '小赵', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 22 MINUTE,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 37 MINUTE,
+    NULL, NULL, UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 35 MINUTE);
+
+INSERT INTO cleaning_handover
+    (id, task_id, table_id, ticket_id, event, from_status, to_status, operator_name,
+     expected_finish_at, unfinished_reason, created_at)
+VALUES
+(1, 3, 3, 3, '结账待清洁', '占用', '清洁中', '小王', NULL, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 20 MINUTE),
+(2, 3, 3, 3, '接单', '待接单', '清洁中', '小赵',
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 37 MINUTE, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 22 MINUTE),
+(3, 3, 3, 3, '完成清洁', '清洁中', '空闲', '小赵',
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 37 MINUTE, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 3 DAY + INTERVAL 35 MINUTE),
+(4, 1, 4, 4, '结账待清洁', '占用', '清洁中', '小李', NULL, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 90 MINUTE),
+(5, 2, 6, 5, '结账待清洁', '占用', '清洁中', '小王', NULL, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 45 MINUTE),
+(6, 2, 6, 5, '接单', '待接单', '清洁中', '小赵',
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR + INTERVAL 20 MINUTE, NULL,
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 40 MINUTE),
+(7, 2, 6, 5, '暂存原因', '清洁中', '清洁中', '小赵',
+    UTC_TIMESTAMP() + INTERVAL 8 HOUR + INTERVAL 20 MINUTE,
+    '地面有咖啡渍，等待清洁剂补充', UTC_TIMESTAMP() + INTERVAL 8 HOUR - INTERVAL 15 MINUTE);

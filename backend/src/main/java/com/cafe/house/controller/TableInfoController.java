@@ -2,6 +2,7 @@ package com.cafe.house.controller;
 
 import com.cafe.house.common.ApiResponse;
 import com.cafe.house.entity.TableInfo;
+import com.cafe.house.service.CleaningService;
 import com.cafe.house.service.TableInfoService;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,27 +25,25 @@ public class TableInfoController {
     private TableInfoService service;
 
     @GetMapping
-    public ApiResponse<List<TableInfo>> list(@RequestParam(required = false) String status) {
+    public ApiResponse<List<CleaningService.TableDetail>> list(@RequestParam(required = false) String status) {
         return ApiResponse.success(service.list(status));
     }
 
     @PostMapping
-    public ApiResponse<TableInfo> create(@RequestBody TableInfo input) {
+    public ApiResponse<CleaningService.TableDetail> create(@RequestBody TableInfo input) {
         return ApiResponse.success(service.create(input));
     }
 
     @PutMapping("/{id}")
-    public ApiResponse<TableInfo> update(@PathVariable Long id, @RequestBody TableInfo input) {
+    public ApiResponse<CleaningService.TableDetail> update(@PathVariable Long id, @RequestBody TableInfo input) {
         return ApiResponse.success(service.update(id, input));
     }
 
+    /** expectedStatus 由前端带上：页面上的旧状态并发过期时，由后端行锁内再校验一次。 */
     @PostMapping("/{id}/open")
-    public ApiResponse<TableInfo> open(@PathVariable Long id) {
-        return ApiResponse.success(service.open(id));
-    }
-
-    @PostMapping("/{id}/clean")
-    public ApiResponse<TableInfo> clean(@PathVariable Long id) {
-        return ApiResponse.success(service.clean(id));
+    public ApiResponse<CleaningService.TableDetail> open(
+            @PathVariable Long id,
+            @RequestBody(required = false) CleaningService.OpenTableRequest req) {
+        return ApiResponse.success(service.open(id, req));
     }
 }

@@ -7,6 +7,7 @@ import com.cafe.house.repository.TableInfoRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -16,11 +17,17 @@ public class TableInfoService {
     @Autowired
     private TableInfoRepository repo;
 
-    public List<TableInfo> list(String status) {
-        return status == null ? repo.findAll() : repo.findByStatus(status);
+    @Autowired
+    private CleaningService cleaningService;
+
+    @Transactional(readOnly = true)
+    public List<CleaningService.TableDetail> list(String status) {
+        List<TableInfo> tables = status == null ? repo.findAll() : repo.findByStatus(status);
+        return cleaningService.enrichTables(tables);
     }
 
-    public TableInfo create(TableInfo input) {
+    @Transactional
+    public CleaningService.TableDetail create(TableInfo input) {
         if (input.tableNo == null || input.tableNo.isBlank()) {
             throw new BizException("桌号不能为空");
         }
@@ -30,17 +37,19 @@ public class TableInfoService {
         if (input.seats == null || input.seats <= 0) {
             throw new BizException("座位数必须大于 0");
         }
+        if (input.status != null && !"空闲".equals(input.status)) {
+            throw new BizException("新增桌台必须为「空闲」；占用和清洁中只能由结账/清洁流程产生");
+        }
         TableInfo t = new TableInfo();
         t.tableNo = input.tableNo;
         t.seats = input.seats;
-        t.status = input.status == null ? "空闲" : input.status;
-        if (!Dict.isValidTableStatus(t.status)) {
-            throw new BizException("状态必须是 空闲 / 占用 / 清洁中 之一");
-        }
-        return repo.save(t);
+        t.status = "空闲";
+        return cleaningService.enrichTables(List.of(repo.save(t))).get(0);
     }
 
-    public TableInfo update(Long id, TableInfo input) {
+    /** 只允许维护桌号、座位数；状态必须走开台、结账、清洁交接流程。 */
+    @Transactional
+    public CleaningService.TableDetail update(Long id, TableInfo input) {
         TableInfo t = repo.findById(id).orElseThrow(() -> new BizException("桌台不存在"));
         if (input.tableNo != null) {
             if (!input.tableNo.equals(t.tableNo) && repo.existsByTableNo(input.tableNo)) {
@@ -54,38 +63,19 @@ public class TableInfoService {
             }
             t.seats = input.seats;
         }
-        if (input.status != null) {
-            if (!Dict.isValidTableStatus(input.status)) {
-                throw new BizException("状态必须是 空闲 / 占用 / 清洁中 之一");
-            }
-            t.status = input.status;
+        if (input.status != null && !Dict.isValidTableStatus(input.status)) {
+            throw new BizException("状态必须是 空闲 / 占用 / 清洁中 之一");
         }
-        return repo.save(t);
+        if (input.status != null && !input.status.equals(t.status)) {
+            throw new BizException("不能手工改写桌台状态：结账后必须清洁，清洁完成后才会回到空闲");
+        }
+        return cleaningService.enrichTables(List.of(repo.save(t))).get(0);
     }
 
-    /** 开台：只有「空闲」可开台，置为「占用」；清洁中不能开台。 */
-    public TableInfo open(Long id) {
-        TableInfo t = repo.findById(id).orElseThrow(() -> new BizException("桌台不存在"));
-        if (!"空闲".equals(t.status)) {
-            throw new BizException("只有「空闲」的桌台可以开台（清洁中无法开台）");
-        }
-        t.status = "占用";
-        return repo.save(t);
-    }
-
-    /**
-     * 清洁：占用 → 清洁中（开始收台清洁）；清洁中 → 空闲（清洁完成）。
-     * 空闲桌台无需清洁。
-     */
-    public TableInfo clean(Long id) {
-        TableInfo t = repo.findById(id).orElseThrow(() -> new BizException("桌台不存在"));
-        if ("占用".equals(t.status)) {
-            t.status = "清洁中";
-        } else if ("清洁中".equals(t.status)) {
-            t.status = "空闲";
-        } else {
-            throw new BizException("桌台当前为空闲，无需清洁");
-        }
-        return repo.save(t);
+    /** 开台动作统一走清洁服务的行锁与清洁队列校验。 */
+    @Transactional
+    public CleaningService.TableDetail open(Long id, CleaningService.OpenTableRequest req) {
+        TableInfo table = cleaningService.openTable(id, req);
+        return cleaningService.enrichTables(List.of(table)).get(0);
     }
 }

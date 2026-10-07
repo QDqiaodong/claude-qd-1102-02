@@ -7,6 +7,7 @@ import com.cafe.house.service.OrderTicketService.CreateTicketRequest;
 import com.cafe.house.service.OrderTicketService.FinishPreview;
 import com.cafe.house.service.OrderTicketService.FinishTicketRequest;
 import com.cafe.house.service.OrderTicketService.OrderTicketDetail;
+import com.cafe.house.service.OrderTicketService.SettleTicketRequest;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -59,7 +60,9 @@ public class OrderTicketController {
     }
 
     @PostMapping("/{id}/settle")
-    public ApiResponse<OrderTicketDetail> settle(@PathVariable Long id) {
-        return ApiResponse.success(service.settle(id));
+    public ApiResponse<OrderTicketDetail> settle(
+            @PathVariable Long id,
+            @RequestBody(required = false) SettleTicketRequest req) {
+        return ApiResponse.success(service.settle(id, req));
     }
 }

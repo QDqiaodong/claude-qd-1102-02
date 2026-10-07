@@ -55,6 +55,9 @@ public class OrderTicketService {
     @Autowired
     private BeanConsumptionRepository consumptionRepo;
 
+    @Autowired
+    private CleaningService cleaningService;
+
     /** 同一桌台允许的未结账状态集合 */
     private static final List<String> ACTIVE_STATUSES = List.of("制作中", "已完成");
 
@@ -68,11 +71,13 @@ public class OrderTicketService {
         if (req.tableId() == null) {
             throw new BizException("请选择桌台");
         }
-        TableInfo table = tableRepo.findById(req.tableId())
+        TableInfo table = tableRepo.findByIdForUpdate(req.tableId())
+                .stream().findFirst()
                 .orElseThrow(() -> new BizException("桌台不存在"));
         if (!"占用".equals(table.status)) {
             throw new BizException("桌台尚未开台，无法点单");
         }
+        // 桌台行已加锁；这里用普通查询复核活跃账单，避免和开台路径形成反向锁顺序。
         List<OrderTicket> active = ticketRepo.findByTableIdAndStatusIn(req.tableId(), ACTIVE_STATUSES);
         if (!active.isEmpty()) {
             throw new BizException("该桌台已有未结账账单");
@@ -152,20 +157,35 @@ public class OrderTicketService {
         return detail(id);
     }
 
-    /** 结账：已完成 → 已结账，并释放桌台为「空闲」。结账不再触碰豆量。 */
+    /**
+     * 结账：已完成 → 已结账。结账同一事务中把桌台从占用放入清洁队列，
+     * 收银员不能直接得到空闲桌台；并发重复结账由账单行锁拦截。
+     */
     @Transactional
-    public OrderTicketDetail settle(Long id) {
-        OrderTicket ticket = ticketRepo.findById(id).orElseThrow(() -> new BizException("账单不存在"));
+    public OrderTicketDetail settle(Long id, SettleTicketRequest req) {
+        String cashier = req == null || req.operator() == null ? null : req.operator().trim();
+        if (cashier == null || cashier.isEmpty()) {
+            throw new BizException("请选择或填写结账收银员");
+        }
+        if (cashier.length() > 32) {
+            throw new BizException("收银员姓名不能超过 32 个字符");
+        }
+
+        OrderTicket ticket = lockTicket(id);
+        if ("已结账".equals(ticket.status)) {
+            throw new BizException("该账单已结账，桌台已进入清洁队列，请勿重复结账");
+        }
         if (!Dict.canTransferTicket(ticket.status, "已结账")) {
             throw new BizException("请先完成制作再结账");
         }
+
+        LocalDateTime now = LocalDateTime.now();
         ticket.status = "已结账";
+        ticket.settledBy = cashier;
+        ticket.settledAt = now;
         ticketRepo.save(ticket);
         if (ticket.tableId != null) {
-            tableRepo.findById(ticket.tableId).ifPresent(t -> {
-                t.status = "空闲";
-                tableRepo.save(t);
-            });
+            cleaningService.enqueueAfterSettlement(ticket.tableId, ticket.id, cashier, now);
         }
         return detail(id);
     }
@@ -395,6 +415,9 @@ public class OrderTicketService {
     }
 
     public record FinishTicketRequest(String operator) {
+    }
+
+    public record SettleTicketRequest(String operator) {
     }
 
     public record OrderItemDetail(

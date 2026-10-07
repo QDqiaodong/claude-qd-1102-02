@@ -14,6 +14,8 @@ const preview = ref(null)       // 完成前消耗预览
 const operator = ref(localStorage.getItem('cafe_operator') || '')
 const OPERATOR_PRESETS = ['小张', '小李', '小王']
 const finishing = ref(false)
+const settling = ref(false)
+const opening = ref(false)
 
 const tableType = (s) => ({ '空闲': 'success', '占用': 'warning', '清洁中': 'info' }[s] || 'info')
 const ticketType = (s) => ({ '制作中': 'warning', '已完成': 'success', '已结账': 'info' }[s] || 'info')
@@ -42,7 +44,15 @@ async function selectTable(t) {
   current.value = null
   preview.value = null
   if (t.status === '空闲') return
-  if (t.status === '清洁中') { ElMessage.info('该桌台清洁中，暂不可点单'); return }
+  if (t.status === '清洁中' || t.activeCleaning) {
+    const cleaning = t.activeCleaning
+    if (cleaning?.status === '清洁中') {
+      ElMessage.info(`该桌台由「${cleaning.cleanerName}」清洁中，预计 ${fmtTime(cleaning.expectedFinishAt)} 完成，暂不可开台`)
+    } else {
+      ElMessage.info('该桌台已结账，正在等待清洁人员接单；清洁完成前不能开台')
+    }
+    return
+  }
   const all = await api.listOrderTickets()
   const active = all.find((x) => x.tableId === t.id && (x.status === '制作中' || x.status === '已完成'))
   if (active) {
@@ -56,12 +66,21 @@ async function selectTable(t) {
 
 async function openSelected() {
   if (!selected.value) { ElMessage.warning('请先选择桌台'); return }
+  if (opening.value) return
+  opening.value = true
   try {
-    const updated = await api.openTable(selected.value.id)
+    const expectedStatus = selected.value.status
+    const updated = await api.openTable(selected.value.id, expectedStatus)
     await loadTables()
-    await selectTable(updated)
+    const opened = tables.value.find((t) => t.id === updated.id) || updated
+    await selectTable(opened)
     ElMessage.success('已开台')
-  } catch (e) { ElMessage.error(e.message) }
+  } catch (e) {
+    await loadTables()
+    ElMessage.error(e.message)
+  } finally {
+    opening.value = false
+  }
 }
 
 function onOperator(v) {
@@ -126,13 +145,25 @@ async function finish() {
 }
 
 async function settle() {
+  if (settling.value) return
+  if (!operator.value || !operator.value.trim()) {
+    ElMessage.warning('请先选择或填写结账收银员'); return
+  }
+  settling.value = true
   try {
-    await api.settleOrderTicket(current.value.ticket.id)
+    await api.settleOrderTicket(current.value.ticket.id, operator.value.trim())
     await loadTables()
+    selected.value = tables.value.find((t) => t.id === current.value.ticket.tableId) || selected.value
     current.value = null
     preview.value = null
-    emit('changed'); ElMessage.success('已结账，桌台已释放')
-  } catch (e) { ElMessage.error(e.message) }
+    emit('changed'); ElMessage.success('已结账：桌台已进入清洁队列，清洁完成后才能再次开台')
+  } catch (e) {
+    await Promise.all([refresh().catch(() => {}), loadTables()])
+    await loadMenu()
+    ElMessage({ type: 'error', message: e.message, duration: 6000, showClose: true })
+  } finally {
+    settling.value = false
+  }
 }
 
 function fmtTime(t) { return t ? String(t).replace('T', ' ').slice(0, 16) : '' }
@@ -256,10 +287,14 @@ onMounted(async () => { await loadTables(); await loadMenu() })
         <div class="col-head">桌台与结算</div>
         <div class="table-grid">
           <button v-for="t in tables" :key="t.id" class="table-card"
-            :class="{ on: selected && selected.id === t.id }" @click="selectTable(t)">
+            :class="{ on: selected && selected.id === t.id, blocked: t.status === '清洁中' || t.activeCleaning }"
+            @click="selectTable(t)">
             <span class="tc-no">{{ t.tableNo }}</span>
             <span class="tc-seats">{{ t.seats }} 座</span>
             <el-tag size="small" :type="tableType(t.status)">{{ t.status }}</el-tag>
+            <span v-if="t.activeCleaning" class="tc-clean">
+              {{ t.activeCleaning.status === '待接单' ? '等待清洁接单' : `清洁：${t.activeCleaning.cleanerName}` }}
+            </span>
           </button>
         </div>
 
@@ -267,7 +302,15 @@ onMounted(async () => { await loadTables(); await loadMenu() })
           <div class="pay-row">
             <span>当前桌台</span><b>{{ selected.tableNo }}（{{ selected.status }}）</b>
           </div>
-          <el-button v-if="selected.status === '空闲'" type="primary" @click="openSelected">开台</el-button>
+          <el-button v-if="selected.status === '空闲' && !selected.activeCleaning" type="primary"
+            :loading="opening" :disabled="opening" @click="openSelected">
+            {{ opening ? '正在开台…' : '开台' }}
+          </el-button>
+          <el-alert v-if="selected.status === '清洁中' || selected.activeCleaning" type="warning"
+            :closable="false" show-icon class="clean-alert"
+            :title="selected.activeCleaning?.status === '清洁中'
+              ? `清洁责任人 ${selected.activeCleaning.cleanerName || '—'}，预计 ${fmtTime(selected.activeCleaning.expectedFinishAt)} 完成；收银员不能绕过清洁开台`
+              : '桌台已结账释放，正在等待清洁人员接单；不能直接开台'" />
 
           <template v-if="current">
             <div class="pay-row">
@@ -280,7 +323,10 @@ onMounted(async () => { await loadTables(); await loadMenu() })
               @click="finish">
               {{ finishing ? '正在完成…' : '完成制作（按配方扣豆）' }}
             </el-button>
-            <el-button v-if="current.ticket.status === '已完成'" type="primary" @click="settle">结账</el-button>
+            <el-button v-if="current.ticket.status === '已完成'" type="primary"
+              :loading="settling" :disabled="settling || !operator" @click="settle">
+              {{ settling ? '正在结账…' : '结账并移交清洁' }}
+            </el-button>
             <el-button size="small" text @click="refresh">刷新账单/库存</el-button>
           </template>
         </div>
@@ -341,8 +387,11 @@ onMounted(async () => { await loadTables(); await loadMenu() })
   background: #fff; cursor: pointer; transition: all .15s;
 }
 .table-card.on { border-color: var(--primary); background: var(--primary-wash); }
+.table-card.blocked { border-style: dashed; background: #fdf6ec; }
 .tc-no { font-weight: 700; font-size: 16px; }
 .tc-seats { font-size: 12px; color: var(--muted); }
+.tc-clean { font-size: 11px; color: #b25e09; line-height: 1.3; }
+.clean-alert { margin-top: 2px; }
 
 .pay-box { border-top: 1px dashed var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 .pay-box.hint { color: var(--muted); }

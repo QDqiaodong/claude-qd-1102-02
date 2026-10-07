@@ -42,6 +42,14 @@ public final class Dict {
     /** 账单状态机：只能逐级前进（制作中→已完成→已结账） */
     public static final List<String> TICKET_FLOW = List.of("制作中", "已完成", "已结账");
 
+    // ---------------- 清洁交接 ----------------
+    /** 清洁单状态：结账后待接单，清洁人员接单后清洁中，完成后归档为已完成 */
+    public static final List<String> CLEANING_TASK_STATUS = List.of("待接单", "清洁中", "已完成");
+
+    /** 清洁交接事件：只追加，不覆盖、不修改历史 */
+    public static final List<String> CLEANING_EVENTS = List.of(
+            "结账待清洁", "接单", "暂存原因", "完成清洁", "撤回清洁");
+
     // ---------------- 取值 / 校验方法 ----------------
 
     public static boolean isValidRoastLevel(String s) {
